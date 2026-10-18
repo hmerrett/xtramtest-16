@@ -16,6 +16,66 @@ The ROM currently performs two types of RAM test:
 
 The ROM does not currently test parity RAM or the parity checking circuit. Parity is disabled at all times.
 
+## XTRAMTEST-16: for 8086 and 80286 machines
+
+![XTRAMTEST-16 screenshot](img/screenshot16.png)
+
+*Emulator screenshot with simulated faults: a dead D11 chip from 128K to 256K, and a single bad D2 bit at 4A122.*
+
+XTRAMTEST-16 is a copy of this ROM for machines with a 16-bit memory bus: 8086 (and NEC V30) machines, and 80286 AT-class machines such as the IBM 5170 and its clones.  The same image runs on both CPUs.
+
+On these machines every 16-bit word of memory is split across two sets of chips: the low byte (even addresses, data lines D0-D7) and the high byte (odd addresses, D8-D15).  XTRAMTEST-16 tests memory a word at a time over the full 16-bit bus, and reports the errors for each byte separately, so you know which set of chips to look at.
+
+Differences from XTRAMTEST:
+
+- Both tests read and write 16-bit words, so every access uses all 16 data lines.  March-U uses `0000`/`FFFF`; the bus exercise uses `FFFF`, `0000`, `5555`, `AAAA`, `FF00` and `00FF` (the last two put opposite values in the two bytes).
+- At the start of each block, the bus exercise walks a 1 and then a 0 across all 16 data lines, to find shorted or open data lines.
+- The bus exercise also writes single bytes to the high and low halves of each word, in both orders.  This finds faults in the byte select logic (BHE#/A0), where writing one byte also changes the other.
+- The results are shown in two grids, one for each test, and each 16K block shows two values: **Hi** for the high byte and **Lo** for the low byte.
+- NMI and parity checking are turned off the XT way (port A0h, and port 61h bits 4-5) and the AT way (port 70h bit 7, and port 61h bits 2-3).
+
+### Reading the results
+
+Each value is a bit mask of the data bits that have failed in that block, collected over all passes (`--` means no errors).  In the **Lo** column bit 0 is D0; in the **Hi** column bit 0 is D8:
+
+| Value | 01 | 02 | 04 | 08 | 10 | 20 | 40 | 80 |
+|-------|----|----|----|----|----|----|----|----|
+| Lo    | D0 | D1 | D2 | D3 | D4 | D5 | D6 | D7 |
+| Hi    | D8 | D9 | D10 | D11 | D12 | D13 | D14 | D15 |
+
+In the screenshot above, `08` in the Hi column of every block from 128K to 256K points to the D11 chip of that bank, and `04` in the Lo column of block 48-4B is a single bad D2 bit.
+
+- The same bit failing in one byte across a whole bank usually means a bad chip.
+- `FF FF` means no RAM is responding; those blocks are skipped after that.  `FF` in only one column means that byte of the bank is missing or dead (chips not fitted, or a bad data bus buffer).
+- Errors found only by the bus exercise point at the bus or timing rather than at a chip.  For example, two data lines shorted together show up as one bit in each column (D3 and D11 shorted show as Hi `08` and Lo `08`), and a byte select fault shows up as most of the bits in one column.
+
+As with XTRAMTEST, parity bits are not tested.
+
+### ROM images for XTRAMTEST-16
+
+`make` builds these along with the XTRAMTEST files:
+
+| File | Use |
+|------|-----|
+| `xtramtest16_low.8k` + `xtramtest16_high.8k` | a pair of 2764 (8K) EPROMs |
+| `xtramtest16_low.16k` + `xtramtest16_high.16k` | a pair of 27128 (16K) EPROMs |
+| `xtramtest16_low.32k` + `xtramtest16_high.32k` | a pair of 27256 (32K) EPROMs, as in the IBM 5170 |
+| `xtramtest16_low.64k` + `xtramtest16_high.64k` | a pair of 27512 (64K) EPROMs |
+| `xtramtest16.8k`, `xtramtest16.32k`, `xtramtest16.64k` | a single 8-bit ROM, laid out like the XTRAMTEST images: for an option ROM socket, or a board with a single BIOS ROM |
+| `LOADXT16.COM` | DOS loader, used like `LOADXTRT.COM` |
+
+Most 8086 and 80286 boards keep the BIOS in a pair of ROMs: one for the low byte (D0-D7) and one for the high byte (D8-D15) of each word.  Burn the `_low` image into the chip for the low socket and the `_high` image into the chip for the high socket.  The sockets are usually marked LOW/HIGH or L/H (a board marked EVEN/ODD means low/high); otherwise check your board's documentation.  If the two chips are swapped, the machine will not start.  Each image holds the 8K program repeated to fill the chip, so it works whichever part of the chip your board maps to the top of memory.
+
+The [Supersoft/Landmark](https://www.minuszerodegrees.net/supersoft_landmark/Supersoft%20Landmark%20ROM.htm) page linked below also covers fitting diagnostic ROMs to the IBM 5170.
+
+### Limitations of XTRAMTEST-16
+
+- As with XTRAMTEST, running from the BIOS sockets needs an MDA or CGA (or compatible) card.
+- Only conventional memory (the first 640K) is tested.  Extended memory above 1MB on 80286 machines is not tested.
+- Some 80286 boards built around an integrated chipset (such as the C&T NEAT) need their own BIOS to set up the memory controller, and may not work with XTRAMTEST-16 fitted in place of the BIOS.  On those boards, use the option ROM or DOS method instead.
+
+The XTRAMTEST-16 source is `xtramtest16.asm` and `inc16/` (its own copy of `inc/`), plus `loadxt16.asm` and `tools/makerom16`.  `make runx16` and `make runcom16` run it under DOSBox-X on an emulated 80286 (add `CPU16=8086` for an 8086), like `make runx` and `make runcom`.
+
 ## Using this ROM to test RAM in your PC/XT or clone
 
 There are three ways to use this ROM to test RAM in your computer.

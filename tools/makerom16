@@ -1,0 +1,94 @@
+#!/usr/bin/env perl
+# Make the ROM images for XTRAMTEST-16 from the 8K binary.
+#
+# calculate the checksum and set the last byte to make the sum 0, then write:
+#
+#   NAME.8k, NAME.32k, NAME.64k
+#	a single 8-bit wide ROM, laid out the same way as tools/makerom does
+#	(for option ROM sockets, and boards with one 8-bit BIOS ROM)
+#
+#   NAME_low.Nk + NAME_high.Nk	(N = 8, 16, 32, 64)
+#	a pair of ROMs for a 16-bit wide BIOS: the low ROM holds the low byte
+#	of each word (D0-D7) and the high ROM the high byte (D8-D15).  N is the
+#	size of each chip in KB (2764, 27128, 27256, 27512).  The 8K image is
+#	repeated to fill the whole pair, so the reset vector at FFFF0 is found
+#	whichever part of the chips the board decodes.
+
+use strict;
+use bytes;
+
+my $insize = 8*1024;
+
+my %BIN;
+
+sub getbin {
+	my ( $fn ) = @_;
+	return $BIN{$fn} if $BIN{$fn};
+
+	open my $fh, "<", $fn or die "$fn: $!\n";
+	binmode $fh;
+	my $bytes;
+	local $/ = undef;
+	$bytes = <$fh>;
+	close $fh;
+
+	my $count = length( $bytes );
+	die "file is the wrong size: $count != $insize\n" unless $count == $insize;
+
+	my $lastbyte = ord( substr( $bytes, -1 ) );
+	my $sum = unpack( "%8C*", $bytes );
+	my $diff = ( 0x100 - $sum ) & 0xFF;
+
+	substr( $bytes, -1, 1, chr( ( $lastbyte + $diff ) & 0xFF ) );
+
+	$BIN{$fn} = $bytes;
+	return $bytes;
+}
+
+
+sub write_rom {
+	my ( $fn ) = @_;
+	my $out;
+
+	if ( $fn =~ m/^(.*?)_(low|high)[.](\d+)[kK]$/ ) {
+		my ( $base, $half, $size ) = ( $1, $2, $3 );
+		die "bad size: $size\n" unless $size =~ m/^(8|16|32|64)$/;
+
+		my $bytes = getbin( "$base.bin" );
+		my $image = $bytes x ( 2 * $size * 1024 / $insize );
+		my $start = $half eq "high" ? 1 : 0;	# high byte = second byte of each word
+		$out = join( "", map { substr( $image, 2 * $_ + $start, 1 ) } 0 .. $size * 1024 - 1 );
+
+	} elsif ( $fn =~ m/^(.*?)[.](\d+)[kK]$/ ) {
+		my ( $base, $size ) = ( $1, $2 );
+		my $bytes = getbin( "$base.bin" );
+
+		if ( $size == $insize / 1024 ) {
+			$out = $bytes;
+		} elsif ( $size == 16 or $size == 32 ) {
+			my $blanks = int( $size*1024 / $insize - 1 );
+			$out = ( "\xFF" x ( $insize * $blanks ) ) . $bytes;
+		} elsif ( $size == 64 ) {
+			$out = ( ( "\xFF" x ( $insize * 3 ) ) . $bytes ) x 2;
+		} else {
+			die "bad size: $size\n";
+		}
+
+	} else {
+		die "bad filename: $fn\n";
+	}
+
+	open my $fh, ">", $fn or die "$fn: $!\n";
+	binmode $fh;
+	print $fh $out;
+	close $fh;
+}
+
+my $TARGET = $ENV{TARGET16} // "xtramtest16";
+@ARGV = ( "$TARGET.8k", "$TARGET.32k", "$TARGET.64k",
+	map { ( "${TARGET}_low.${_}k", "${TARGET}_high.${_}k" ) } 8, 16, 32, 64 )
+	unless @ARGV;
+
+for my $fn ( @ARGV ) {
+	write_rom( $fn );
+}

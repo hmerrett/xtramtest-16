@@ -1,0 +1,147 @@
+; code: language=nasm tabSize=8
+%include "defines.inc"
+
+int19_vec equ (0x19*4)
+int19_save equ 0xDC
+
+; ---------------------------------------------------------------------------
+section_save
+; ---------------------------------------------------------------------------
+section .romdata ; MARK: __ .rwdata __
+; ---------------------------------------------------------------------------
+
+option_prompt: db 13, 10, " XTRAMTEST-16 - Press T to start ", 0
+option_skip: db "(skipping)", 13, 10, 0
+
+
+; ---------------------------------------------------------------------------
+section_restore ; MARK: __ restore __
+; ---------------------------------------------------------------------------
+
+optrom_sig:	dw	0xAA55
+optrom_size:	db	(RESET+0x10)/512
+
+optrom_start:	jmp	install_int19		; entry point for option ROM
+dos_start:	jmp	runtest			; entry point for loading from DOS
+
+
+install_int19:
+		pushf
+		push	bx
+		push	si
+		push	ds
+
+		xor	bx,bx
+		mov	ds,bx			; set DS to the interrupt table
+
+		mov	bx, (int19_save*4)
+		mov	si, [int19_vec]
+
+		cmp	si, int_19_handler	; if the interrupt vector is already set to ours, skip
+		je	.done
+
+		mov	word [bx], si		; save the original interrupt vector offset
+		mov	si, [int19_vec+2]
+		mov	word [bx+2], si		; save the original interrupt vector segment
+
+		mov	word [int19_vec], int_19_handler	; set the new interrupt vector offset
+		mov	word [int19_vec+2], cs			; set the new interrupt vector segment
+
+	.done:	
+		pop	ds
+		pop 	si
+		pop	bx
+		popf
+		retf
+
+bios_puts:
+		mov	ah, 0x0E
+	.loop:
+		mov	al, [cs:si]
+		inc	si
+		or	al, al
+		jz	.done
+		int	0x10
+		jmp	.loop
+	.done:
+		ret
+
+
+bios_read_input:
+		mov	bx, 3 * 18 			; 3 seconds timeout
+	.delay_keypress:
+		sti					; Enable interrupts so timer can run
+		add	bx, [0x46C]			; Add pause ticks to current timer ticks
+	.delay:
+		mov	ah, 01h
+		int	16h				; Check for keypress
+		jnz	.keypress			; End pause if key pressed
+
+		mov	cx, [0x46C]			; Get current ticks
+		sub	cx, bx				; See if pause is up yet
+		jc	.delay				; Nope
+
+	.done:
+		cli					; Disable interrupts
+		ret
+
+	.keypress:
+		xor	ah, ah
+		int	16h				; Flush keystroke from buffer
+		jmp	short .done
+
+
+int_19_handler:
+		; pushf
+		; push	ax			; save registers
+		; push	bx
+		; push	cx
+		; push	dx
+		; push	si
+		; push	ds
+		; push	es
+
+		xor	ax,ax
+		mov	ds,ax			; set DS to the interrupt table
+
+		mov	si, option_prompt
+		call	bios_puts
+		call	bios_read_input
+		cmp	al, 'T'
+		je	runtest
+		cmp	al, 't'
+		je	runtest
+
+		mov	si, option_skip
+		call	bios_puts
+
+		; pop 	es
+		; pop	ds
+		; pop 	si
+		; pop	dx
+		; pop	cx
+		; pop	bx
+		; pop	ax
+		; popf
+		int	int19_save
+		iret
+
+runtest:
+		mov	al, CMOS_NMI_OFF
+		out	IO_CMOS_IDX, al		; AT-class: no NMI interrupts
+		xor	ax, ax
+		out	IO_NMI_MASK, al		; XT-class: no NMI interrupts
+		mov	al, PPIB_DEFAULT
+		out	IO_PPI_B, al		; Disable parity checking
+
+		mov	ah, 0x0F		; get current video mode
+		int	0x10			; al now has current video mode (need for certain BIOS bugs)
+
+		mov	ah, 1			; hide cursor using BIOS call
+		mov	cx, 0x2000		
+		int	0x10
+		cli				; no interrupts from here on: the video RAM
+						;   test points SP into this (writable) code
+		jmp	xtramtest_start
+
+
